@@ -6,7 +6,9 @@ using WorkSphere.API.Data;
 
 using WorkSphere.API.Services;
 using WorkSphere.API.Services.Interfaces;
+using DotNetEnv;
 
+Env.Load();
 var builder = WebApplication.CreateBuilder(args);
 
 // Add Controllers & Services
@@ -15,7 +17,7 @@ builder.Services.AddScoped<IEmployeeService, EmployeeService>();
 builder.Services.AddScoped<IHrService, HrService>();
 
 // Configure MongoDB with EF Core
-var mongoConnectionString = builder.Configuration.GetConnectionString("MongoDB");
+var mongoConnectionString = Environment.GetEnvironmentVariable("MONGODB_URL") ?? builder.Configuration.GetConnectionString("MongoDB");
 builder.Services.AddDbContext<AppDbContext>(options =>
     options.UseMongoDB(mongoConnectionString ?? "mongodb://localhost:27017/WorkSphereDb", "WorkSphereDb"));
 
@@ -39,11 +41,12 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
     });
 
 // Configure CORS for Angular Frontend
+var frontendUrl = Environment.GetEnvironmentVariable("FRONTEND_URL") ?? "http://localhost:4200";
 builder.Services.AddCors(options =>
 {
-    options.AddPolicy("AllowAngularApp", policy =>
+    options.AddPolicy("AllowFrontend", policy =>
     {
-        policy.WithOrigins("http://localhost:4200") // Angular default port
+        policy.WithOrigins(frontendUrl) // Angular default port
               .AllowAnyHeader()
               .AllowAnyMethod();
     });
@@ -62,7 +65,7 @@ if (app.Environment.IsDevelopment())
 
 app.UseHttpsRedirection();
 
-app.UseCors("AllowAngularApp");
+app.UseCors("AllowFrontend");
 
 app.UseAuthentication();
 app.UseAuthorization();
