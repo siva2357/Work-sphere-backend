@@ -1,63 +1,85 @@
+
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using System.Text;
 using WorkSphere.API.Data;
-
-using WorkSphere.API.Services;
-using WorkSphere.API.Services.Interfaces;
 using DotNetEnv;
 
 Env.Load();
+
 var builder = WebApplication.CreateBuilder(args);
 
-// Add Controllers & Services
+// Controllers
 builder.Services.AddControllers();
-builder.Services.AddScoped<IEmployeeService, EmployeeService>();
-builder.Services.AddScoped<IHrService, HrService>();
 
-// Configure MongoDB with EF Core
-var mongoConnectionString = Environment.GetEnvironmentVariable("MONGODB_URL") ?? builder.Configuration.GetConnectionString("MongoDB");
+// PostgreSQL + Entity Framework Core
+var postgresConnectionString =
+    Environment.GetEnvironmentVariable("DATABASE_URL")
+    ?? builder.Configuration.GetConnectionString("PostgreSQL")
+    ?? throw new InvalidOperationException(
+        "PostgreSQL connection string is not configured.");
+
 builder.Services.AddDbContext<AppDbContext>(options =>
-    options.UseMongoDB(mongoConnectionString ?? "mongodb://localhost:27017/WorkSphereDb", "WorkSphereDb"));
+    options.UseNpgsql(postgresConnectionString));
 
-// Configure JWT Authentication
+// JWT Authentication
 var jwtSettings = builder.Configuration.GetSection("Jwt");
-var key = Encoding.UTF8.GetBytes(jwtSettings["Key"]!);
 
-builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+var jwtKey = Environment.GetEnvironmentVariable("JWT_KEY")
+    ?? jwtSettings["Key"]
+    ?? throw new InvalidOperationException("JWT key is missing.");
+
+if (Encoding.UTF8.GetByteCount(jwtKey) < 32)
+{
+    throw new InvalidOperationException(
+        "JWT key must contain at least 32 bytes.");
+}
+
+builder.Services.AddAuthentication(
+    JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
     {
-        options.TokenValidationParameters = new TokenValidationParameters
-        {
-            ValidateIssuer = true,
-            ValidateAudience = true,
-            ValidateLifetime = true,
-            ValidateIssuerSigningKey = true,
-            ValidIssuer = jwtSettings["Issuer"],
-            ValidAudience = jwtSettings["Audience"],
-            IssuerSigningKey = new SymmetricSecurityKey(key)
-        };
+        options.TokenValidationParameters =
+            new TokenValidationParameters
+            {
+                ValidateIssuer = true,
+                ValidateAudience = true,
+                ValidateLifetime = true,
+                ValidateIssuerSigningKey = true,
+
+                ValidIssuer = jwtSettings["Issuer"],
+                ValidAudience = jwtSettings["Audience"],
+
+                IssuerSigningKey =
+                    new SymmetricSecurityKey(
+                        Encoding.UTF8.GetBytes(jwtKey))
+            };
     });
 
-// Configure CORS for Angular Frontend
-var frontendUrl = Environment.GetEnvironmentVariable("FRONTEND_URL") ?? "http://localhost:4200";
+builder.Services.AddAuthorization();
+
+// Angular CORS
+var frontendUrl =
+    Environment.GetEnvironmentVariable("FRONTEND_URL")
+    ?? "http://localhost:4200";
+
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowFrontend", policy =>
     {
-        policy.WithOrigins(frontendUrl) // Angular default port
+        policy.WithOrigins(frontendUrl)
               .AllowAnyHeader()
               .AllowAnyMethod();
     });
 });
 
-// Learn more about configuring OpenAPI at https://aka.ms/aspnet/openapi
+// OpenAPI
 builder.Services.AddOpenApi();
 
 var app = builder.Build();
 
-// Configure the HTTP request pipeline.
+// HTTP Pipeline
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
@@ -72,28 +94,31 @@ app.UseAuthorization();
 
 app.MapControllers();
 
-// Seed Dummy Data
-using (var scope = app.Services.CreateScope())
+// Actual PostgreSQL health check
+app.MapGet("/api/health", async (AppDbContext db) =>
 {
-    var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-    
-    if (!dbContext.Announcements.Any())
+    try
     {
-        dbContext.Announcements.AddRange(
-            new WorkSphere.API.Models.Announcement { Id = MongoDB.Bson.ObjectId.GenerateNewId().ToString(), Title = "Welcome to Work-Sphere!", Content = "We are excited to launch our new HR portal.", DatePosted = DateTime.UtcNow, AuthorId = "system" },
-            new WorkSphere.API.Models.Announcement { Id = MongoDB.Bson.ObjectId.GenerateNewId().ToString(), Title = "Q3 Townhall Meeting", Content = "Join us this Friday for the Q3 townhall.", DatePosted = DateTime.UtcNow.AddDays(-2), AuthorId = "system" }
-        );
-        dbContext.SaveChanges();
-    }
+        var connected = await db.Database.CanConnectAsync();
 
-    if (!dbContext.FinancialEvents.Any())
-    {
-        dbContext.FinancialEvents.AddRange(
-            new WorkSphere.API.Models.FinancialEvent { Id = MongoDB.Bson.ObjectId.GenerateNewId().ToString(), Title = "Payroll Cutoff", Description = "Last day to submit timesheets.", Date = DateTime.UtcNow.AddDays(5) },
-            new WorkSphere.API.Models.FinancialEvent { Id = MongoDB.Bson.ObjectId.GenerateNewId().ToString(), Title = "Tax Filing Deadline", Description = "Ensure your tax forms are uploaded.", Date = DateTime.UtcNow.AddDays(15) }
-        );
-        dbContext.SaveChanges();
+        return connected
+            ? Results.Ok(new
+            {
+                status = "Healthy",
+                database = "PostgreSQL",
+                connected = true,
+                timestamp = DateTime.UtcNow
+            })
+            : Results.Problem(
+                title: "Database connection failed",
+                statusCode: 503);
     }
-}
+    catch
+    {
+        return Results.Problem(
+            title: "Database connection failed",
+            statusCode: 503);
+    }
+});
 
 app.Run();

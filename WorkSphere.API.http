@@ -1,6 +1,6 @@
-@WorkSphere.API_HostAddress = http://localhost:5054
+@WorkSphere.API_HostAddress = http://localhost:5000
 
-GET {{WorkSphere.API_HostAddress}}/weatherforecast/
+GET {{WorkSphere.API_HostAddress}}/api/health
 Accept: application/json
 
 ###
