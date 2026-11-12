@@ -1,17 +1,19 @@
-
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using System.Text;
+using WorkSphere.API.Constants;
 using WorkSphere.API.Data;
+using WorkSphere.API.Services;
 using DotNetEnv;
 
 Env.Load();
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Controllers
+// Controllers & Services
 builder.Services.AddControllers();
+builder.Services.AddScoped<IPermissionService, PermissionService>();
 
 // PostgreSQL + Entity Framework Core
 var postgresConnectionString =
@@ -79,6 +81,13 @@ builder.Services.AddOpenApi();
 
 var app = builder.Build();
 
+// Seed 17-Table Organizational Hierarchy & Centralized Permission Engine
+using (var scope = app.Services.CreateScope())
+{
+    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+    await DbSeeder.SeedAsync(db);
+}
+
 // HTTP Pipeline
 if (app.Environment.IsDevelopment())
 {
@@ -95,7 +104,7 @@ app.UseAuthorization();
 app.MapControllers();
 
 // Actual PostgreSQL health check
-app.MapGet("/api/health", async (AppDbContext db) =>
+app.MapGet(ApiConstants.Health, async (AppDbContext db) =>
 {
     try
     {

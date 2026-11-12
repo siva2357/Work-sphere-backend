@@ -1,6 +1,245 @@
 @WorkSphere.API_HostAddress = http://localhost:5000
 
+### 1. Health Check
 GET {{WorkSphere.API_HostAddress}}/api/health
 Accept: application/json
 
-###
+### 2. Login as L1 CTO (Employee Hierarchy - Organization Scope)
+POST {{WorkSphere.API_HostAddress}}/api/auth/login
+Content-Type: application/json
+
+{
+  "email": "cto@worksphere.com",
+  "password": "Cto@12345"
+}
+
+### 3. Login as L4 Project Manager (Employee Hierarchy - Project Scope)
+POST {{WorkSphere.API_HostAddress}}/api/auth/login
+Content-Type: application/json
+
+{
+  "email": "pm@worksphere.com",
+  "password": "Pm@12345"
+}
+
+### 4. Login as L8 Developer (Employee Hierarchy - Own/Team Scope)
+POST {{WorkSphere.API_HostAddress}}/api/auth/login
+Content-Type: application/json
+
+{
+  "email": "employee@worksphere.com",
+  "password": "Emp@12345"
+}
+
+### 5. Login as H1 CHRO (HR Hierarchy - Organization Scope)
+POST {{WorkSphere.API_HostAddress}}/api/auth/login
+Content-Type: application/json
+
+{
+  "email": "chro@worksphere.com",
+  "password": "Chro@12345"
+}
+
+### 6. Login as H2 HR Manager (HR Hierarchy)
+POST {{WorkSphere.API_HostAddress}}/api/auth/login
+Content-Type: application/json
+
+{
+  "email": "hr@worksphere.com",
+  "password": "Hr@12345"
+}
+
+### 7. Login as H4 Payroll Manager (HR Hierarchy - Payroll & Salary Access)
+POST {{WorkSphere.API_HostAddress}}/api/auth/login
+Content-Type: application/json
+
+{
+  "email": "payroll@worksphere.com",
+  "password": "Pay@12345"
+}
+
+### 8. View All Organizational Levels (L1-L10 & H1-H6) and Designations
+GET {{WorkSphere.API_HostAddress}}/api/rbac/levels
+Accept: application/json
+
+### 9. View All 23 System Roles
+GET {{WorkSphere.API_HostAddress}}/api/rbac/roles
+Accept: application/json
+
+### 10. View Permission Matrix for Developer Role (EMP_DEVELOPER)
+GET {{WorkSphere.API_HostAddress}}/api/rbac/roles/EMP_DEVELOPER/permissions
+Accept: application/json
+
+### 11. View Permission Matrix for HR Manager Role (HR_MANAGER)
+GET {{WorkSphere.API_HostAddress}}/api/rbac/roles/HR_MANAGER/permissions
+Accept: application/json
+
+### 12. View Seeded Employees & Reporting Hierarchy
+GET {{WorkSphere.API_HostAddress}}/api/rbac/employees
+Accept: application/json
+
+### 13. View Configured Multi-Stage Approval Workflows
+GET {{WorkSphere.API_HostAddress}}/api/rbac/approval-workflows
+Accept: application/json
+
+### 14. View All 22 Company Departments & Subdepartments Hierarchy
+GET {{WorkSphere.API_HostAddress}}/api/rbac/departments
+Accept: application/json
+
+### 15. View 4-Phase Recruitment & Onboarding Workflow Overview (Employee vs HR Levels)
+GET {{WorkSphere.API_HostAddress}}/api/recruitment/workflow-overview
+Accept: application/json
+
+### 16. View Job Openings (Synced with External Career Website)
+GET {{WorkSphere.API_HostAddress}}/api/recruitment/jobs
+Accept: application/json
+
+### 17. View Candidates & 4-Phase Funnel Evaluations
+GET {{WorkSphere.API_HostAddress}}/api/recruitment/candidates
+Accept: application/json
+
+### 18. Simulate External Career Website Submitting a Candidate Application (Starts Phase 1: Assessment)
+POST {{WorkSphere.API_HostAddress}}/api/recruitment/external/apply
+Content-Type: application/json
+
+{
+  "jobCode": "JOB-201",
+  "fullName": "Rohan Mehra",
+  "email": "rohan.mehra@example.com",
+  "phone": "+91 99887 76655",
+  "experience": "4.5 Years",
+  "resumeUrl": "https://careers.worksphere.com/resumes/rohan-mehra.pdf"
+}
+
+### 19. View All Request Approval Workflows (Leave, Resignation, Hike/Appraisal, Promotion)
+GET {{WorkSphere.API_HostAddress}}/api/requests/workflows
+Accept: application/json
+
+### 20. View All Employee Requests with Live Multi-Stage Approval Chains
+GET {{WorkSphere.API_HostAddress}}/api/requests
+Accept: application/json
+
+### 21. Approve Current Level of Promotion Request (REQ-2026-102)
+POST {{WorkSphere.API_HostAddress}}/api/requests/REQ-2026-102/approve
+Content-Type: application/json
+
+{
+  "remarks": "Approved by CTO at Level 3. Forwarding to HR Manager for Final Grade & Role Elevation."
+}
+
+### 22. Approve Current Level of Salary Hike Request (REQ-2026-103)
+POST {{WorkSphere.API_HostAddress}}/api/requests/REQ-2026-103/approve
+Content-Type: application/json
+
+{
+  "remarks": "Salary band verified by Payroll Manager. Forwarding to HR Manager for final sign-off."
+}
+
+### 23. My Attendance (Individual Employee Daily Logs & Monthly Summary)
+GET {{WorkSphere.API_HostAddress}}/api/attendance/my?employeeCode=EMP-005
+Accept: application/json
+
+### 24. Attendance Management (Manager / Department View Across Reporting Lines & Subdepartments)
+GET {{WorkSphere.API_HostAddress}}/api/attendance/team?managerCode=EMP-004&departmentCode=ENG
+Accept: application/json
+
+### 25. Mark Attendance (Punch In / Punch Out)
+POST {{WorkSphere.API_HostAddress}}/api/attendance/mark
+Content-Type: application/json
+
+{
+  "employeeCode": "EMP-005",
+  "action": "PUNCH_IN",
+  "location": "17.4482, 78.3742",
+  "workMode": "On-site HQ",
+  "remarks": "Morning check-in from Hyderabad HQ"
+}
+
+### 26. Task Management & My Tasks (List All or Filter by Assignee / Department)
+GET {{WorkSphere.API_HostAddress}}/api/tasks?departmentCode=ENG
+Accept: application/json
+
+### 27. Assign a New Task to a Team Member (Task Management -> Create Task)
+POST {{WorkSphere.API_HostAddress}}/api/tasks
+Content-Type: application/json
+
+{
+  "title": "Build Real-Time Department Attendance Analytics Widget",
+  "description": "Integrate /api/attendance/team endpoint into the Angular Manager Attendance Sheet view.",
+  "projectCode": "PRJ-101",
+  "assigneeEmployeeCode": "EMP-005",
+  "assignedByEmployeeCode": "EMP-004",
+  "priority": "High",
+  "estimatedHours": 12,
+  "category": "Frontend & API",
+  "subtasks": [
+    "Connect AttendanceService to PostgreSQL API",
+    "Add Department & Subdepartment filter dropdown",
+    "Verify batch reminder button"
+  ]
+}
+
+### 28. My Leaves (Personal CL, SL, EL, CO Leave Balances & Leave History)
+GET {{WorkSphere.API_HostAddress}}/api/leaves/my/EMP-005
+Accept: application/json
+
+### 29. Leave Management (Manager / Department Team Leave Proposals)
+GET {{WorkSphere.API_HostAddress}}/api/leaves/team?managerCode=EMP-004
+Accept: application/json
+
+### 30. My Documents (Personal Offer, Hike, Promotion, Relieving Letters + Company Policies)
+GET {{WorkSphere.API_HostAddress}}/api/documents/my/EMP-005
+Accept: application/json
+
+### 31. Team Management (Team Member Profiles with Live Attendance %, Task Metrics & Leave Breakdown)
+GET {{WorkSphere.API_HostAddress}}/api/teams/members?managerCode=EMP-004
+Accept: application/json
+
+### 32. Project Management & My Payroll (Projects List & Employee Monthly Payslips)
+GET {{WorkSphere.API_HostAddress}}/api/payroll/my/EMP-005
+Accept: application/json
+
+### 33. Fetch Registered Companies (2 Dummy Companies Synced from External Main Website + Main HR Access)
+GET {{WorkSphere.API_HostAddress}}/api/companies
+Accept: application/json
+
+### 34. View Company 1 (CMP-001: WorkSphere Technologies) HR Employee Directory
+GET {{WorkSphere.API_HostAddress}}/api/companies/CMP-001/directory
+Accept: application/json
+
+### 35. View Company 2 (CMP-002: NexaCloud Enterprise) HR Employee Directory
+GET {{WorkSphere.API_HostAddress}}/api/companies/CMP-002/directory
+Accept: application/json
+
+### 36. Main HR Creates a New Employee in the Employee Directory (Grants Platform Login & Role Access)
+POST {{WorkSphere.API_HostAddress}}/api/companies/CMP-001/directory/employees
+Content-Type: application/json
+
+{
+  "createdByHrEmailOrCode": "chro@worksphere.com",
+  "fullName": "Siddharth Rao",
+  "email": "siddharth.rao@worksphere.com",
+  "initialPassword": "Sid@12345",
+  "phone": "+91 98450 99887",
+  "departmentCode": "ENG-BE",
+  "designationCode": "DESIG_SR_DEV",
+  "roleCode": "EMP_SR_DEVELOPER",
+  "employmentType": "Full-time",
+  "workLocation": "Bangalore, India",
+  "managerEmployeeCode": "EMP-004"
+}
+
+### 37. Login as Company 2 (NexaCloud) Main HR Administrator
+POST {{WorkSphere.API_HostAddress}}/api/auth/login
+Content-Type: application/json
+
+{
+  "email": "hr.admin@nexacloud.io",
+  "password": "NexaHr@12345",
+  "companyCode": "CMP-002"
+}
+
+
+
+
+
