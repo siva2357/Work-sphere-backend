@@ -38,10 +38,18 @@ namespace WorkSphere.API.Constants
             public const string CompanyCreateEmployee = "companies/{companyCode}/directory/employees";
             public const string DirectoryCreateEmployee = "employee-directory/employees";
 
+            public const string CompanyBulkImport = "companies/{companyCode}/directory/bulk-import";
+            public const string DirectoryBulkImport = "employee-directory/bulk-import";
+
+            public const string CompanyImportCsv = "companies/{companyCode}/directory/import-csv";
+            public const string DirectoryImportCsv = "employee-directory/import-csv";
+
             public const string FullGetAll = "/api/companies";
             public const string FullExternalRegister = "/api/companies/external-register";
             public const string FullEmployeeDirectory = "/api/employee-directory";
             public const string FullDirectoryCreateEmployee = "/api/employee-directory/employees";
+            public const string FullDirectoryBulkImport = "/api/employee-directory/bulk-import";
+            public const string FullDirectoryImportCsv = "/api/employee-directory/import-csv";
         }
 
         /// <summary>
@@ -51,16 +59,22 @@ namespace WorkSphere.API.Constants
         {
             public const string Base = "api/rbac";
             public const string Departments = "departments";
+            public const string DepartmentById = "departments/{id:guid}";
             public const string Levels = "levels";
+            public const string Designations = "designations";
+            public const string DesignationById = "designations/{id:guid}";
             public const string Roles = "roles";
             public const string RolePermissions = "roles/{roleCode}/permissions";
+            public const string Permissions = "permissions";
             public const string Employees = "employees";
             public const string EmployeeOverrides = "employees/{employeeId:guid}/overrides";
             public const string ApprovalWorkflows = "approval-workflows";
 
             public const string FullDepartments = "/api/rbac/departments";
             public const string FullLevels = "/api/rbac/levels";
+            public const string FullDesignations = "/api/rbac/designations";
             public const string FullRoles = "/api/rbac/roles";
+            public const string FullPermissions = "/api/rbac/permissions";
             public const string FullEmployees = "/api/rbac/employees";
             public const string FullApprovalWorkflows = "/api/rbac/approval-workflows";
         }

@@ -21,6 +21,10 @@ namespace WorkSphere.API.Controllers
             _permissionService = permissionService;
         }
 
+        // ====================================================================
+        // 1. DEPARTMENTS & SUB-DEPARTMENTS
+        // ====================================================================
+
         /// <summary>
         /// Lists all 22 Top-Level Company Departments and their nested Subdepartments hierarchy.
         /// </summary>
@@ -41,6 +45,7 @@ namespace WorkSphere.API.Controllers
                     d.Name,
                     d.Description,
                     d.HeadEmployeeId,
+                    d.IsActive,
                     SubDepartments = allDepartments
                         .Where(sub => sub.ParentDepartmentId == d.Id)
                         .Select(sub => new
@@ -49,7 +54,8 @@ namespace WorkSphere.API.Controllers
                             sub.Code,
                             sub.Name,
                             sub.Description,
-                            sub.HeadEmployeeId
+                            sub.HeadEmployeeId,
+                            sub.IsActive
                         })
                         .ToList()
                 })
@@ -57,6 +63,89 @@ namespace WorkSphere.API.Controllers
 
             return Ok(topLevel);
         }
+
+        /// <summary>
+        /// Creates a new department or subdepartment.
+        /// </summary>
+        [HttpPost(ApiConstants.Rbac.Departments)]
+        public async Task<IActionResult> CreateDepartment([FromBody] CreateDepartmentDto dto)
+        {
+            if (string.IsNullOrWhiteSpace(dto.Name) || string.IsNullOrWhiteSpace(dto.Code))
+            {
+                return BadRequest(new { message = "Department Name and Code are required." });
+            }
+
+            var codeExists = await _db.Departments.AnyAsync(d => d.Code.ToLower() == dto.Code.Trim().ToLower());
+            if (codeExists)
+            {
+                return BadRequest(new { message = $"Department with code '{dto.Code}' already exists." });
+            }
+
+            var dept = new Department
+            {
+                Name = dto.Name.Trim(),
+                Code = dto.Code.Trim().ToUpper(),
+                Description = dto.Description?.Trim(),
+                ParentDepartmentId = dto.ParentDepartmentId,
+                IsActive = true,
+                CreatedAt = DateTime.UtcNow
+            };
+
+            _db.Departments.Add(dept);
+            await _db.SaveChangesAsync();
+
+            return Ok(dept);
+        }
+
+        /// <summary>
+        /// Updates department details.
+        /// </summary>
+        [HttpPut(ApiConstants.Rbac.DepartmentById)]
+        public async Task<IActionResult> UpdateDepartment(Guid id, [FromBody] UpdateDepartmentDto dto)
+        {
+            var dept = await _db.Departments.FindAsync(id);
+            if (dept == null)
+            {
+                return NotFound(new { message = "Department not found." });
+            }
+
+            dept.Name = dto.Name.Trim();
+            dept.Description = dto.Description?.Trim();
+            dept.HeadEmployeeId = dto.HeadEmployeeId;
+            dept.IsActive = dto.IsActive;
+
+            await _db.SaveChangesAsync();
+            return Ok(dept);
+        }
+
+        /// <summary>
+        /// Deactivates or removes a department.
+        /// </summary>
+        [HttpDelete(ApiConstants.Rbac.DepartmentById)]
+        public async Task<IActionResult> DeleteDepartment(Guid id)
+        {
+            var dept = await _db.Departments.Include(d => d.SubDepartments).FirstOrDefaultAsync(d => d.Id == id);
+            if (dept == null)
+            {
+                return NotFound(new { message = "Department not found." });
+            }
+
+            var hasEmployees = await _db.Employees.AnyAsync(e => e.DepartmentId == id);
+            if (hasEmployees)
+            {
+                dept.IsActive = false;
+                await _db.SaveChangesAsync();
+                return Ok(new { message = $"Department '{dept.Name}' contains active employees and was deactivated instead of deleted." });
+            }
+
+            _db.Departments.Remove(dept);
+            await _db.SaveChangesAsync();
+            return Ok(new { message = $"Department '{dept.Name}' deleted successfully." });
+        }
+
+        // ====================================================================
+        // 2. ORGANIZATIONAL LEVELS & DESIGNATIONS (L1-L10 & H1-H6)
+        // ====================================================================
 
         /// <summary>
         /// Lists all Organizational Levels (L1-L10 & H1-H6) along with their Designations.
@@ -78,6 +167,7 @@ namespace WorkSphere.API.Controllers
                 l.Name,
                 l.HierarchyTrack,
                 l.RankOrder,
+                l.Description,
                 Designations = designations
                     .Where(d => d.OrganizationalLevelId == l.Id)
                     .Select(d => new
@@ -85,12 +175,161 @@ namespace WorkSphere.API.Controllers
                         d.Id,
                         d.Code,
                         d.Title,
+                        d.HierarchyTrack,
                         d.TypicalReportingTo,
-                        d.DefaultRoleCode
+                        d.DefaultRoleCode,
+                        d.Responsibilities
                     })
+                    .ToList()
             });
 
             return Ok(result);
+        }
+
+        /// <summary>
+        /// Lists all Designations across levels.
+        /// </summary>
+        [HttpGet(ApiConstants.Rbac.Designations)]
+        public async Task<IActionResult> GetDesignations()
+        {
+            var designations = await _db.Designations
+                .Include(d => d.OrganizationalLevel)
+                .OrderBy(d => d.HierarchyTrack)
+                .ThenBy(d => d.Code)
+                .Select(d => new
+                {
+                    d.Id,
+                    d.Code,
+                    d.Title,
+                    d.OrganizationalLevelId,
+                    LevelCode = d.OrganizationalLevel != null ? d.OrganizationalLevel.Code : string.Empty,
+                    LevelName = d.OrganizationalLevel != null ? d.OrganizationalLevel.Name : string.Empty,
+                    d.HierarchyTrack,
+                    d.TypicalReportingTo,
+                    d.DefaultRoleCode,
+                    d.Responsibilities
+                })
+                .ToListAsync();
+
+            return Ok(designations);
+        }
+
+        /// <summary>
+        /// Creates a new Designation mapped to an Organizational Level.
+        /// </summary>
+        [HttpPost(ApiConstants.Rbac.Designations)]
+        public async Task<IActionResult> CreateDesignation([FromBody] CreateDesignationDto dto)
+        {
+            if (string.IsNullOrWhiteSpace(dto.Title) || string.IsNullOrWhiteSpace(dto.Code))
+            {
+                return BadRequest(new { message = "Designation Title and Code are required." });
+            }
+
+            var codeExists = await _db.Designations.AnyAsync(d => d.Code.ToLower() == dto.Code.Trim().ToLower());
+            if (codeExists)
+            {
+                return BadRequest(new { message = $"Designation with code '{dto.Code}' already exists." });
+            }
+
+            var level = await _db.OrganizationalLevels.FindAsync(dto.OrganizationalLevelId);
+            if (level == null)
+            {
+                return BadRequest(new { message = "Selected Organizational Level does not exist." });
+            }
+
+            var designation = new Designation
+            {
+                Title = dto.Title.Trim(),
+                Code = dto.Code.Trim().ToUpper(),
+                OrganizationalLevelId = dto.OrganizationalLevelId,
+                HierarchyTrack = dto.HierarchyTrack,
+                TypicalReportingTo = dto.TypicalReportingTo?.Trim(),
+                DefaultRoleCode = dto.DefaultRoleCode?.Trim(),
+                Responsibilities = dto.Responsibilities?.Trim()
+            };
+
+            _db.Designations.Add(designation);
+            await _db.SaveChangesAsync();
+
+            return Ok(designation);
+        }
+
+        /// <summary>
+        /// Updates a Designation.
+        /// </summary>
+        [HttpPut(ApiConstants.Rbac.DesignationById)]
+        public async Task<IActionResult> UpdateDesignation(Guid id, [FromBody] UpdateDesignationDto dto)
+        {
+            var desig = await _db.Designations.FindAsync(id);
+            if (desig == null)
+            {
+                return NotFound(new { message = "Designation not found." });
+            }
+
+            desig.Title = dto.Title.Trim();
+            desig.TypicalReportingTo = dto.TypicalReportingTo?.Trim();
+            desig.DefaultRoleCode = dto.DefaultRoleCode?.Trim();
+            desig.Responsibilities = dto.Responsibilities?.Trim();
+
+            await _db.SaveChangesAsync();
+            return Ok(desig);
+        }
+
+        /// <summary>
+        /// Deletes a Designation if not currently assigned to employees.
+        /// </summary>
+        [HttpDelete(ApiConstants.Rbac.DesignationById)]
+        public async Task<IActionResult> DeleteDesignation(Guid id)
+        {
+            var desig = await _db.Designations.FindAsync(id);
+            if (desig == null)
+            {
+                return NotFound(new { message = "Designation not found." });
+            }
+
+            var inUse = await _db.Employees.AnyAsync(e => e.DesignationId == id);
+            if (inUse)
+            {
+                return BadRequest(new { message = "Cannot delete designation because it is currently assigned to one or more employees." });
+            }
+
+            _db.Designations.Remove(desig);
+            await _db.SaveChangesAsync();
+            return Ok(new { message = $"Designation '{desig.Title}' deleted successfully." });
+        }
+
+        // ====================================================================
+        // 3. PERMISSIONS CATALOG & ROLES
+        // ====================================================================
+
+        /// <summary>
+        /// Lists all system permissions catalog grouped by module.
+        /// </summary>
+        [HttpGet(ApiConstants.Rbac.Permissions)]
+        public async Task<IActionResult> GetAllPermissions()
+        {
+            var perms = await _db.Permissions
+                .OrderBy(p => p.Module)
+                .ThenBy(p => p.Action)
+                .ToListAsync();
+
+            var grouped = perms
+                .GroupBy(p => p.Module)
+                .Select(g => new
+                {
+                    Module = g.Key,
+                    Permissions = g.Select(p => new
+                    {
+                        p.Id,
+                        p.Code,
+                        p.Module,
+                        p.Action,
+                        p.Description
+                    }).ToList()
+                })
+                .ToList();
+
+            return Ok(grouped);
         }
 
         /// <summary>
@@ -119,6 +358,39 @@ namespace WorkSphere.API.Controllers
         }
 
         /// <summary>
+        /// Creates a new custom role.
+        /// </summary>
+        [HttpPost(ApiConstants.Rbac.Roles)]
+        public async Task<IActionResult> CreateRole([FromBody] CreateRoleDto dto)
+        {
+            if (string.IsNullOrWhiteSpace(dto.Name) || string.IsNullOrWhiteSpace(dto.Code))
+            {
+                return BadRequest(new { message = "Role Name and Code are required." });
+            }
+
+            var exists = await _db.Roles.AnyAsync(r => r.Code.ToLower() == dto.Code.Trim().ToLower());
+            if (exists)
+            {
+                return BadRequest(new { message = $"Role with code '{dto.Code}' already exists." });
+            }
+
+            var role = new Role
+            {
+                Name = dto.Name.Trim(),
+                Code = dto.Code.Trim().ToUpper(),
+                HierarchyTrack = dto.HierarchyTrack,
+                Description = dto.Description?.Trim(),
+                IsSystemRole = false,
+                CreatedAt = DateTime.UtcNow
+            };
+
+            _db.Roles.Add(role);
+            await _db.SaveChangesAsync();
+
+            return Ok(role);
+        }
+
+        /// <summary>
         /// Returns the complete module & action permission matrix for a given Role code (e.g. EMP_CTO, EMP_DEVELOPER, HR_MANAGER).
         /// </summary>
         [HttpGet(ApiConstants.Rbac.RolePermissions)]
@@ -143,11 +415,13 @@ namespace WorkSphere.API.Controllers
                     Module = g.Key,
                     Permissions = g.Select(rp => new
                     {
-                        rp.Permission!.Code,
+                        rp.Permission!.Id,
+                        rp.Permission.Code,
                         rp.Permission.Action,
                         rp.Scope
-                    }).OrderBy(p => p.Action)
-                });
+                    }).OrderBy(p => p.Action).ToList()
+                })
+                .ToList();
 
             return Ok(new
             {
@@ -156,6 +430,7 @@ namespace WorkSphere.API.Controllers
                 role.Name,
                 role.HierarchyTrack,
                 role.Description,
+                role.IsSystemRole,
                 Modules = grouped
             });
         }
@@ -189,14 +464,18 @@ namespace WorkSphere.API.Controllers
                     {
                         RoleId = role.Id,
                         PermissionId = perm.Id,
-                        Scope = item.Scope
+                        Scope = string.IsNullOrWhiteSpace(item.Scope) ? "Own" : item.Scope
                     });
                 }
             }
 
             await _db.SaveChangesAsync();
-            return Ok(new { message = $"Updated permissions for role '{role.Code}'." });
+            return Ok(new { message = $"Updated {request.Permissions.Count} permissions for role '{role.Code}'." });
         }
+
+        // ====================================================================
+        // 4. EMPLOYEES HIERARCHY & PERMISSION OVERRIDES
+        // ====================================================================
 
         /// <summary>
         /// Lists all employees with their Organizational Level, Designation, Roles, and Reporting relationships.
@@ -225,20 +504,26 @@ namespace WorkSphere.API.Controllers
                 e.FullName,
                 e.Email,
                 e.PortalType,
-                Department = e.Department?.Name,
+                DepartmentId = e.DepartmentId,
+                DepartmentName = e.Department?.Name,
+                DepartmentCode = e.Department?.Code,
+                LevelId = e.OrganizationalLevelId,
                 LevelCode = e.OrganizationalLevel?.Code,
                 HierarchyTrack = e.OrganizationalLevel?.HierarchyTrack,
-                Designation = e.Designation?.Title,
-                Roles = e.EmployeeRoles.Where(er => er.Role != null).Select(er => er.Role!.Code),
+                DesignationId = e.DesignationId,
+                DesignationTitle = e.Designation?.Title,
+                Roles = e.EmployeeRoles.Where(er => er.Role != null).Select(er => er.Role!.Code).ToList(),
                 ReportingTo = reporting
                     .Where(r => r.EmployeeId == e.Id)
                     .Select(r => new
                     {
                         ManagerName = r.Manager?.FullName,
+                        ManagerCode = r.Manager?.EmployeeCode,
                         r.RelationshipType,
                         r.IsPrimary
                     })
-            });
+                    .ToList()
+            }).ToList();
 
             return Ok(result);
         }
@@ -329,10 +614,10 @@ namespace WorkSphere.API.Controllers
                         s.AllowDelegation,
                         s.IsMandatory
                     })
-            });
+                    .ToList()
+            }).ToList();
 
             return Ok(result);
         }
     }
 }
-

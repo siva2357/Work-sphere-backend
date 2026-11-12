@@ -143,5 +143,20 @@ namespace WorkSphere.API.DTOs
         public string WorkLocation { get; set; } = "Bangalore, India";
         public string? ManagerEmployeeCode { get; set; }
     }
+
+    public class BulkImportEmployeesDto
+    {
+        public string CreatedByHrEmailOrCode { get; set; } = "chro@worksphere.com";
+        public List<MainHrCreateEmployeeDto> Employees { get; set; } = new();
+    }
+
+    public class BulkImportResultDto
+    {
+        public int TotalSubmitted { get; set; }
+        public int TotalImported { get; set; }
+        public int TotalSkipped { get; set; }
+        public List<string> Messages { get; set; } = new();
+        public List<object> ImportedEmployees { get; set; } = new();
+    }
 }
 

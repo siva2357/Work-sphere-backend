@@ -1,3 +1,5 @@
+using System.IO;
+using System.Text;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -552,6 +554,346 @@ namespace WorkSphere.API.Controllers
                     createdByMainHr = creatorHr.FullName
                 }
             });
+        }
+
+        // =========================================================================
+        // 3. BULK IMPORT & CSV UPLOAD (/hr/employee-directory)
+        // =========================================================================
+
+        /// <summary>
+        /// Main HR Action: Bulk imports multiple employee records into the Company's Employee Directory (/hr/employee-directory).
+        /// </summary>
+        [HttpPost(ApiConstants.Companies.CompanyBulkImport)]
+        [HttpPost(ApiConstants.Companies.DirectoryBulkImport)]
+        public async Task<IActionResult> BulkImportEmployees(
+            [FromBody] BulkImportEmployeesDto dto,
+            string? companyCode = null)
+        {
+            var claimCompanyCode = User.FindFirst("company_code")?.Value;
+            var targetCompanyCode = (!string.IsNullOrWhiteSpace(companyCode) ? companyCode : (claimCompanyCode ?? "CMP-001")).ToUpper();
+
+            var company = await _db.Companies
+                .FirstOrDefaultAsync(c => c.CompanyCode == targetCompanyCode);
+
+            if (company == null)
+                return NotFound(new { message = $"Company '{targetCompanyCode}' not found." });
+
+            var hrIdentifier = (dto.CreatedByHrEmailOrCode ?? company.MainHrEmail).Trim().ToLowerInvariant();
+            var creatorHr = await _db.Employees
+                .FirstOrDefaultAsync(e =>
+                    e.CompanyId == company.Id &&
+                    (e.Email.ToLower() == hrIdentifier || e.EmployeeCode.ToLower() == hrIdentifier))
+                ?? await _db.Employees.FirstOrDefaultAsync(e => e.CompanyId == company.Id && e.IsMainHr);
+
+            if (creatorHr == null)
+            {
+                return StatusCode(403, new
+                {
+                    message = $"Access Denied: Main HR Administrator of '{company.Name}' ({company.CompanyCode}) must be active to import employees."
+                });
+            }
+
+            var result = await ProcessBulkImportAsync(dto.Employees, company, creatorHr);
+            return Ok(result);
+        }
+
+        /// <summary>
+        /// Main HR Action: Uploads and imports a CSV file containing employee records into the Employee Directory.
+        /// Exact CSV Headers: FullName,Email,DepartmentCode,DesignationCode,RoleCode,EmploymentType,WorkLocation,Phone,InitialPassword,ManagerEmployeeCode
+        /// </summary>
+        [HttpPost(ApiConstants.Companies.CompanyImportCsv)]
+        [HttpPost(ApiConstants.Companies.DirectoryImportCsv)]
+        public async Task<IActionResult> ImportEmployeesFromCsv(
+            IFormFile file,
+            [FromForm] string? createdByHrEmailOrCode = null,
+            string? companyCode = null)
+        {
+            if (file == null || file.Length == 0)
+            {
+                return BadRequest(new { message = "Please upload a valid CSV file." });
+            }
+
+            var claimCompanyCode = User.FindFirst("company_code")?.Value;
+            var targetCompanyCode = (!string.IsNullOrWhiteSpace(companyCode) ? companyCode : (claimCompanyCode ?? "CMP-001")).ToUpper();
+
+            var company = await _db.Companies
+                .FirstOrDefaultAsync(c => c.CompanyCode == targetCompanyCode);
+
+            if (company == null)
+                return NotFound(new { message = $"Company '{targetCompanyCode}' not found." });
+
+            var hrIdentifier = (createdByHrEmailOrCode ?? company.MainHrEmail).Trim().ToLowerInvariant();
+            var creatorHr = await _db.Employees
+                .FirstOrDefaultAsync(e =>
+                    e.CompanyId == company.Id &&
+                    (e.Email.ToLower() == hrIdentifier || e.EmployeeCode.ToLower() == hrIdentifier))
+                ?? await _db.Employees.FirstOrDefaultAsync(e => e.CompanyId == company.Id && e.IsMainHr);
+
+            if (creatorHr == null)
+            {
+                return StatusCode(403, new { message = "Main HR Administrator not found for this company." });
+            }
+
+            var parsedEmployees = new List<MainHrCreateEmployeeDto>();
+            using (var reader = new StreamReader(file.OpenReadStream(), Encoding.UTF8))
+            {
+                var headerLine = await reader.ReadLineAsync();
+                if (string.IsNullOrWhiteSpace(headerLine))
+                {
+                    return BadRequest(new { message = "The CSV file is empty." });
+                }
+
+                var headers = ParseCsvLine(headerLine)
+                    .Select(h => h.Trim().ToLowerInvariant().Replace(" ", "").Replace("_", ""))
+                    .ToList();
+
+                int idxFullName = headers.FindIndex(h => h is "fullname" or "name");
+                int idxEmail = headers.FindIndex(h => h is "email" or "workemail");
+                int idxDept = headers.FindIndex(h => h is "departmentcode" or "department" or "dept");
+                int idxDesig = headers.FindIndex(h => h is "designationcode" or "designation" or "role");
+                int idxRole = headers.FindIndex(h => h is "rolecode" or "systemrole" or "systemrolecode");
+                int idxType = headers.FindIndex(h => h is "employmenttype" or "type");
+                int idxLoc = headers.FindIndex(h => h is "worklocation" or "location");
+                int idxPhone = headers.FindIndex(h => h is "phone" or "phonenumber");
+                int idxPassword = headers.FindIndex(h => h is "initialpassword" or "password");
+                int idxManager = headers.FindIndex(h => h is "manageremployeecode" or "manager" or "managercode");
+
+                if (idxFullName == -1 || idxEmail == -1)
+                {
+                    return BadRequest(new
+                    {
+                        message = "Invalid CSV format. Header line must contain at least 'FullName' and 'Email' columns. Example: FullName,Email,DepartmentCode,DesignationCode,RoleCode,EmploymentType,WorkLocation,Phone,InitialPassword,ManagerEmployeeCode"
+                    });
+                }
+
+                string? line;
+                while ((line = await reader.ReadLineAsync()) != null)
+                {
+                    if (string.IsNullOrWhiteSpace(line)) continue;
+                    var cols = ParseCsvLine(line);
+                    if (cols.Count <= Math.Max(idxFullName, idxEmail)) continue;
+
+                    var name = cols[idxFullName].Trim();
+                    var email = cols[idxEmail].Trim();
+                    if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(email)) continue;
+
+                    parsedEmployees.Add(new MainHrCreateEmployeeDto
+                    {
+                        CreatedByHrEmailOrCode = creatorHr.Email,
+                        FullName = name,
+                        Email = email,
+                        DepartmentCode = idxDept >= 0 && idxDept < cols.Count && !string.IsNullOrWhiteSpace(cols[idxDept]) ? cols[idxDept].Trim() : "ENG",
+                        DesignationCode = idxDesig >= 0 && idxDesig < cols.Count && !string.IsNullOrWhiteSpace(cols[idxDesig]) ? cols[idxDesig].Trim() : "DESIG_DEV",
+                        RoleCode = idxRole >= 0 && idxRole < cols.Count && !string.IsNullOrWhiteSpace(cols[idxRole]) ? cols[idxRole].Trim() : null,
+                        EmploymentType = idxType >= 0 && idxType < cols.Count && !string.IsNullOrWhiteSpace(cols[idxType]) ? cols[idxType].Trim() : "Full-time",
+                        WorkLocation = idxLoc >= 0 && idxLoc < cols.Count && !string.IsNullOrWhiteSpace(cols[idxLoc]) ? cols[idxLoc].Trim() : "Bangalore, India",
+                        Phone = idxPhone >= 0 && idxPhone < cols.Count && !string.IsNullOrWhiteSpace(cols[idxPhone]) ? cols[idxPhone].Trim() : "+91 98450 55667",
+                        InitialPassword = idxPassword >= 0 && idxPassword < cols.Count && !string.IsNullOrWhiteSpace(cols[idxPassword]) ? cols[idxPassword].Trim() : "Welcome@12345",
+                        ManagerEmployeeCode = idxManager >= 0 && idxManager < cols.Count && !string.IsNullOrWhiteSpace(cols[idxManager]) ? cols[idxManager].Trim() : null
+                    });
+                }
+            }
+
+            var result = await ProcessBulkImportAsync(parsedEmployees, company, creatorHr);
+            return Ok(result);
+        }
+
+        private async Task<BulkImportResultDto> ProcessBulkImportAsync(
+            List<MainHrCreateEmployeeDto> items,
+            Company company,
+            Employee creatorHr)
+        {
+            var result = new BulkImportResultDto
+            {
+                TotalSubmitted = items.Count
+            };
+
+            if (items.Count == 0)
+            {
+                result.Messages.Add("No employee records provided.");
+                return result;
+            }
+
+            // In-memory cache for ultra-fast lookup
+            var allDepts = await _db.Departments.ToListAsync();
+            var allDesigs = await _db.Designations.Include(d => d.OrganizationalLevel).ToListAsync();
+            var allRoles = await _db.Roles.ToListAsync();
+            var existingEmails = (await _db.Employees.Select(e => e.Email.ToLower()).ToListAsync()).ToHashSet();
+
+            var defaultDept = allDepts.FirstOrDefault(d => d.Code == "ENG") ?? allDepts.First();
+            var defaultDesig = allDesigs.FirstOrDefault(d => d.Code == "DESIG_DEV") ?? allDesigs.First();
+            var defaultRole = allRoles.FirstOrDefault(r => r.Code == SystemRoleCodes.Developer) ?? allRoles.First();
+
+            var prefix = company.CompanyCode == "CMP-002" ? "NX" : "EMP";
+            var companyEmpCount = await _db.Employees.CountAsync(e => e.CompanyId == company.Id);
+            var initialDocCount = await _db.EmployeeDocuments.CountAsync();
+
+            var batchEmployees = new List<Employee>();
+            var batchRoles = new List<EmployeeRole>();
+            var batchLeaves = new List<LeaveBalanceRecord>();
+            var batchDocs = new List<EmployeeDocumentRecord>();
+
+            foreach (var item in items)
+            {
+                if (string.IsNullOrWhiteSpace(item.FullName) || string.IsNullOrWhiteSpace(item.Email))
+                {
+                    result.TotalSkipped++;
+                    result.Messages.Add("Skipped record: Missing Name or Email.");
+                    continue;
+                }
+
+                var normalizedEmail = item.Email.Trim().ToLowerInvariant();
+                if (existingEmails.Contains(normalizedEmail))
+                {
+                    result.TotalSkipped++;
+                    result.Messages.Add($"Skipped '{normalizedEmail}': Email already exists.");
+                    continue;
+                }
+
+                // Resolve Dept
+                var deptCode = (item.DepartmentCode ?? "ENG").Trim().ToUpper();
+                var dept = allDepts.FirstOrDefault(d => d.Code.Equals(deptCode, StringComparison.OrdinalIgnoreCase) || d.Name.Equals(deptCode, StringComparison.OrdinalIgnoreCase))
+                    ?? defaultDept;
+
+                // Resolve Designation & Level
+                var desigCode = (item.DesignationCode ?? "DESIG_DEV").Trim().ToUpper();
+                var desig = allDesigs.FirstOrDefault(d => d.Code.Equals(desigCode, StringComparison.OrdinalIgnoreCase) || d.Title.Equals(desigCode, StringComparison.OrdinalIgnoreCase))
+                    ?? defaultDesig;
+
+                // Resolve Role
+                var targetRoleCode = !string.IsNullOrWhiteSpace(item.RoleCode)
+                    ? item.RoleCode.Trim().ToUpper()
+                    : (desig.DefaultRoleCode ?? SystemRoleCodes.Developer);
+
+                var role = allRoles.FirstOrDefault(r => r.Code.Equals(targetRoleCode, StringComparison.OrdinalIgnoreCase))
+                    ?? defaultRole;
+
+                var portalType = desig.HierarchyTrack == HierarchyTracks.Hr ? PortalTypes.Hr : PortalTypes.Employee;
+
+                companyEmpCount++;
+                var employeeCode = $"{prefix}-{companyEmpCount:D3}";
+                while (existingEmails.Contains(employeeCode.ToLower()))
+                {
+                    companyEmpCount++;
+                    employeeCode = $"{prefix}-{companyEmpCount:D3}";
+                }
+
+                var newEmp = new Employee
+                {
+                    Id = Guid.NewGuid(),
+                    EmployeeCode = employeeCode,
+                    FullName = item.FullName.Trim(),
+                    Email = normalizedEmail,
+                    PortalType = portalType,
+                    CompanyId = company.Id,
+                    IsMainHr = false,
+                    DepartmentId = dept.Id,
+                    DesignationId = desig.Id,
+                    OrganizationalLevelId = desig.OrganizationalLevelId,
+                    Phone = !string.IsNullOrWhiteSpace(item.Phone) ? item.Phone.Trim() : "+91 98450 55667",
+                    EmploymentType = !string.IsNullOrWhiteSpace(item.EmploymentType) ? item.EmploymentType.Trim() : "Full-time",
+                    WorkLocation = !string.IsNullOrWhiteSpace(item.WorkLocation) ? item.WorkLocation.Trim() : "Bangalore, India",
+                    WorkStatus = "Active",
+                    CreatedByEmployeeId = creatorHr.Id,
+                    JoinedAt = DateTime.UtcNow
+                };
+                newEmp.PasswordHash = _passwordHasher.HashPassword(newEmp, !string.IsNullOrWhiteSpace(item.InitialPassword) ? item.InitialPassword : "Welcome@12345");
+
+                batchEmployees.Add(newEmp);
+                existingEmails.Add(normalizedEmail);
+
+                batchRoles.Add(new EmployeeRole
+                {
+                    EmployeeId = newEmp.Id,
+                    RoleId = role.Id,
+                    IsPrimary = true
+                });
+
+                // Leave Balances
+                batchLeaves.AddRange(new[]
+                {
+                    new LeaveBalanceRecord { EmployeeId = newEmp.Id, LeaveType = "Casual Leave", ShortCode = "CL", TotalAllocated = 12, UsedDays = 0, AvailableDays = 12, ColorClass = "bg-emerald" },
+                    new LeaveBalanceRecord { EmployeeId = newEmp.Id, LeaveType = "Sick Leave", ShortCode = "SL", TotalAllocated = 8, UsedDays = 0, AvailableDays = 8, ColorClass = "bg-info" },
+                    new LeaveBalanceRecord { EmployeeId = newEmp.Id, LeaveType = "Earned Leave", ShortCode = "EL", TotalAllocated = 15, UsedDays = 0, AvailableDays = 15, ColorClass = "bg-primary" },
+                    new LeaveBalanceRecord { EmployeeId = newEmp.Id, LeaveType = "Comp-Off", ShortCode = "CO", TotalAllocated = 2, UsedDays = 0, AvailableDays = 2, ColorClass = "bg-warning" }
+                });
+
+                // Offer Letter Document
+                initialDocCount++;
+                batchDocs.Add(new EmployeeDocumentRecord
+                {
+                    DocumentCode = $"DOC-OFFER-{initialDocCount:D3}",
+                    EmployeeId = newEmp.Id,
+                    Title = "Official Offer & Appointment Letter",
+                    Category = "Employment",
+                    CategoryLabel = "Employment Letter",
+                    IssueDate = DateTime.UtcNow.ToString("dd MMM yyyy"),
+                    FileSize = "1.2 MB",
+                    FileFormat = "PDF",
+                    Badge = "Verified",
+                    BadgeType = "emerald",
+                    Description = $"Issued by {creatorHr.FullName} upon Employee Directory bulk import."
+                });
+
+                result.TotalImported++;
+                result.ImportedEmployees.Add(new
+                {
+                    employeeCode = newEmp.EmployeeCode,
+                    name = newEmp.FullName,
+                    email = newEmp.Email,
+                    department = dept.Name,
+                    role = desig.Title,
+                    level = desig.OrganizationalLevel?.Code,
+                    portalType = newEmp.PortalType
+                });
+            }
+
+            if (batchEmployees.Count > 0)
+            {
+                await _db.Employees.AddRangeAsync(batchEmployees);
+                await _db.EmployeeRoles.AddRangeAsync(batchRoles);
+                await _db.LeaveBalances.AddRangeAsync(batchLeaves);
+                await _db.EmployeeDocuments.AddRangeAsync(batchDocs);
+                await _db.SaveChangesAsync();
+            }
+
+            result.Messages.Add($"Successfully imported {result.TotalImported} employees into {company.Name} ({company.CompanyCode}).");
+            return result;
+        }
+
+        private static List<string> ParseCsvLine(string line)
+        {
+            var values = new List<string>();
+            var sb = new StringBuilder();
+            bool inQuotes = false;
+
+            for (int i = 0; i < line.Length; i++)
+            {
+                char c = line[i];
+                if (c == '\"')
+                {
+                    if (inQuotes && i + 1 < line.Length && line[i + 1] == '\"')
+                    {
+                        sb.Append('\"');
+                        i++;
+                    }
+                    else
+                    {
+                        inQuotes = !inQuotes;
+                    }
+                }
+                else if (c == ',' && !inQuotes)
+                {
+                    values.Add(sb.ToString().Trim());
+                    sb.Clear();
+                }
+                else
+                {
+                    sb.Append(c);
+                }
+            }
+            values.Add(sb.ToString().Trim());
+            return values;
         }
     }
 }
